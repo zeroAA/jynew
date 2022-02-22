@@ -12,6 +12,7 @@ using UnityEngine;
 using UnityEngine.AI;
 using Jyx2;
 using System;
+using System.Collections;
 using Cinemachine;
 using Cysharp.Threading.Tasks;
 using Jyx2Configs;
@@ -57,8 +58,8 @@ public class LevelMaster : MonoBehaviour
 	public ETCTouchPad m_TouchPad;
 	public ETCJoystick m_Joystick;
 
-	Transform _player;
-	MapRole _playerView;
+	private Jyx2Player _player;
+	
 	NavMeshAgent _playerNavAgent;
 	GameObject _navPointer;
 
@@ -126,7 +127,7 @@ public class LevelMaster : MonoBehaviour
 	}
 
 	// Use this for initialization
-	async void Start()
+	void Start()
 	{
 		//先关闭触发事件
 		GameObject triggers = GameObject.Find("Level/Triggers");
@@ -175,13 +176,13 @@ public class LevelMaster : MonoBehaviour
 		UpdateMobileControllerUI();
 
 		//尝试绑定主角
-		TryBindPlayer();
+		TryBindPlayer().Forget();
 
 		//大地图不能使用跟随相机（目前好像比较卡？）
 		if (gameMap != null && !gameMap.IsWorldMap())
 		{
 			//初始化跟随相机
-			GameViewPortManager.Instance.InitForLevel(_player);
+			GameViewPortManager.Instance.InitForLevel(_player.transform);
 		}
 
 		//刷新游戏事件
@@ -211,19 +212,24 @@ public class LevelMaster : MonoBehaviour
 
 		if (gameMap != null && !gameMap.IsWorldMap())
 		{
-			//调整摄像机高度
+			//调整摄像机参数
 			var vcamObj = GameObject.Find("CameraGroup/CM vcam1");
 			if (vcamObj != null)
 			{
 				var vcam = vcamObj.GetComponent<CinemachineVirtualCamera>();
 				var body = vcam.GetCinemachineComponent<CinemachineTransposer>();
+				
+				//高度
 				body.m_FollowOffset = GlobalAssetConfig.Instance.defaultVcamOffset;
+				
+				//跟随对象
+				vcam.Follow = _player.transform;
 			}
 
 			if (!IsInBattle)
 			{
 				//显示当前地图名，大地图不用显示
-				await Jyx2_UIManager.Instance.ShowUIAsync(nameof(CommonTipsUIPanel), TipsType.MiddleTop, gameMap.GetShowName());
+				Jyx2_UIManager.Instance.ShowUIAsync(nameof(CommonTipsUIPanel), TipsType.MiddleTop, gameMap.GetShowName()).Forget();
 			}
 		}
 
@@ -331,14 +337,14 @@ public class LevelMaster : MonoBehaviour
 	{
 		_playerNavAgent.enabled = false;
 		Debug.Log("load pos = " + spawnPos);
-		_player.position = spawnPos;
+		_player.transform.position = spawnPos;
 		_playerNavAgent.enabled = true;
 	}
 	void PlayerSpawnRotate(Quaternion ori)
 	{
 		_playerNavAgent.enabled = false;
 		Debug.Log("load ori = " + ori);
-		_player.rotation = ori;
+		_player.transform.rotation = ori;
 		_playerNavAgent.enabled = true;
 	}
 
@@ -348,19 +354,15 @@ public class LevelMaster : MonoBehaviour
 		if (_player == null)
 			return;
 
-		var animator = _playerView.GetAnimator();
+		var animator = _player.m_Animator;
 		if (animator != null)
 		{
 			animator.SetFloat("speed", speed);
 		}
 	}
 
-	private async UniTask SetPlayer(MapRole playerRoleView)
+	private async UniTask SetPlayer(Jyx2Player playerRoleView)
 	{
-		// reverting this change. to fix "reference on null object" error when enter/ exit scene
-		// modified by eaphone at 2021/05/30
-		_playerView = playerRoleView;
-		_player = playerRoleView.transform;
 		_playerNavAgent = playerRoleView.GetComponent<NavMeshAgent>();
 
 		SetPlayerSpeed(0);
@@ -378,36 +380,30 @@ public class LevelMaster : MonoBehaviour
 		_playerNavAgent.acceleration = GameConst.MapAcceleration;
 		_playerNavAgent.autoBraking = false;
 
-		var playerCom = _player.GetComponent<Jyx2Player>();
-		if (playerCom == null)
-		{
-			var player = _player.gameObject.AddComponent<Jyx2Player>();
-			player.Init();
-		}
 
-		await playerRoleView.BindRoleInstance(runtime.Player);
+		playerRoleView.Init();
 		LoadSpawnPosition();
 	}
 
 	// fix bind player failed error when select player before start battle
 	// modified by eaphone at 2021/05/31
-	public void TryBindPlayer()
+	public async UniTask TryBindPlayer()
 	{
 		if (_player != null)
 			return;
 
-		//寻找主角
-		var playerObj = RoleHelper.FindPlayer();
-		if (playerObj != null)
+		_player = RoleHelper.FindPlayer();
+
+		if (_player != null)
 		{
 			//设置主角
-			SetPlayer(playerObj).Forget();
+			await SetPlayer(_player);
 
 			var gameMap = GetCurrentGameMap();
 			if (gameMap != null && gameMap.Tags.Contains("POINTLIGHT")) //点光源
 			{
 				var obj = Jyx2ResourceHelper.CreatePrefabInstance(ConStr.PlayerPointLight);
-				obj.transform.SetParent(playerObj.transform);
+				obj.transform.SetParent(_player.transform);
 				obj.transform.localPosition = Vector3.zero;
 				obj.transform.localScale = Vector3.one;
 			}
@@ -532,19 +528,8 @@ public class LevelMaster : MonoBehaviour
 				{
 					var dist = Vector3.Distance(runtime.Player.View.transform.position, hitInfo.transform.position);
 					Debug.Log("on npc clicked, dist = " + dist);
-
-					if (dist > 4)
-					{
-						runtime.Player.View.Say("太远了，走近一点才能对话");
-					}
-					else //和NPC聊天
-					{
-						var mapRole = hitInfo.transform.GetComponent<MapRole>();
-						if (mapRole != null)
-						{
-							mapRole.DoNpcChat();
-						}
-					}
+					
+					//现在没有直接地图上点击NPC的实现
 				}
 				//BY CG: MASK：15:Ground层
 				else if (Physics.Raycast(ray, out hitInfo, 100, 1 << LayerMask.NameToLayer("Ground")))
@@ -658,12 +643,12 @@ public class LevelMaster : MonoBehaviour
 		right.y = 0;
 		right.Normalize();
 
-		var dest = _player.position + right * h + forward * v;
+		var dest = _player.transform.position + right * h + forward * v;
 		if (_tempDestH == Vector3.zero) _tempDestH = right * h;
 		if (_tempDestV == Vector3.zero) _tempDestV = forward * v;
 		if (m_IsLockingDirection)
 		{
-			dest = _player.position + _tempDestH + _tempDestV;
+			dest = _player.transform.position + _tempDestH + _tempDestV;
 			Vector3 cur_dir = new Vector3(h, v, 0).normalized;
 			Vector3 old_dir = new Vector3(_tempH, _tempV, 0).normalized;
 			if (Vector3.Angle(cur_dir, old_dir) > unlockDegee)
@@ -716,12 +701,12 @@ public class LevelMaster : MonoBehaviour
 		right.y = 0;
 		right.Normalize();
 
-		var dest = _player.position + right * h + forward * v;
+		var dest = _player.transform.position + right * h + forward * v;
 		if (_tempDestH == Vector3.zero) _tempDestH = right * h;
 		if (_tempDestV == Vector3.zero) _tempDestV = forward * v;
 		if (m_IsLockingDirection)
 		{
-			dest = _player.position + _tempDestH + _tempDestV;
+			dest = _player.transform.position + _tempDestH + _tempDestV;
 			Vector3 cur_dir = new Vector3(h, v, 0).normalized;
 			Vector3 old_dir = new Vector3(_tempH, _tempV, 0).normalized;
 			if (Vector3.Angle(cur_dir, old_dir) > unlockDegee)
@@ -738,7 +723,7 @@ public class LevelMaster : MonoBehaviour
 			_tempV = v;
 			//Debug.Log("UnLockingDirection");
 		}
-		_player.LookAt(new Vector3(dest.x, _player.position.y, dest.z));
+		_player.transform.LookAt(new Vector3(dest.x, _player.transform.position.y, dest.z));
 		var sourcePos = _player.transform.position;
 		var maxSpeed = _playerNavAgent.speed;
 
@@ -821,7 +806,7 @@ public class LevelMaster : MonoBehaviour
 				//增加传送时设置朝向。rotation为0时不作调整，需要朝向0时候，可以使用360.
 				if (trans.rotation != Quaternion.identity)
 				{
-					_player.rotation = trans.rotation;
+					_player.transform.rotation = trans.rotation;
 				}
 			}
 			else
@@ -840,7 +825,7 @@ public class LevelMaster : MonoBehaviour
 	public void Transport(Vector3 position)
 	{
 		_playerNavAgent.Warp(position);
-		_player.position = position;
+		_player.transform.position = position;
 	}
 
 	// implement change player facing. 0:top-right, 1:down-right, 2:top-left, 3:down-left
@@ -848,7 +833,7 @@ public class LevelMaster : MonoBehaviour
 	public void SetRotation(int ro)
 	{
 		int[] roationSet = { -90, 0, 180, 90 };
-		_player.rotation = Quaternion.Euler(Vector3.up * roationSet[ro]);
+		_player.transform.rotation = Quaternion.Euler(Vector3.up * roationSet[ro]);
 	}
 
 	//手动存档
@@ -867,8 +852,8 @@ public class LevelMaster : MonoBehaviour
 		}
 
 		runtime.SubMapData = new SubMapSaveData(GetCurrentGameMap().Id);
-		runtime.SubMapData.CurrentPos = _player.position;
-		runtime.SubMapData.CurrentOri = _player.rotation;
+		runtime.SubMapData.CurrentPos = _player.transform.position;
+		runtime.SubMapData.CurrentOri = _player.transform.rotation;
 
 
 		runtime.GameSave(index);
@@ -877,24 +862,16 @@ public class LevelMaster : MonoBehaviour
 
 	public Vector3 GetPlayerPosition()
 	{
-		return _player.position;
+		return _player.transform.position;
 	}
 	public Quaternion GetPlayerOrientation()
 	{
-		return _player.rotation;
+		return _player.transform.rotation;
 	}
-
-	// handle player null exception
-	// modified by eaphone at 2021/05/31
+	
 	public Jyx2Player GetPlayer()
 	{
-		var player = _player.GetComponent<Jyx2Player>();
-		if (player == null)
-		{
-			player = _player.gameObject.AddComponent<Jyx2Player>();
-			player.Init();
-		}
-		return player;
+		return _player;
 	}
 
 	//刷新本场景内的所有事件

@@ -1294,9 +1294,9 @@ namespace Jyx2
                     {
                         if (clonePlayer == null)
                         {
-                            clonePlayer = GameObject.Instantiate(GameRuntimeData.Instance.Player.View.GetAnimator());
+                            clonePlayer = GameObject.Instantiate(Jyx2Player.GetPlayer().m_Animator);
                             clonePlayer.runtimeAnimatorController = null;
-                            GameRuntimeData.Instance.Player.View.gameObject.SetActive(false);
+                            Jyx2Player.GetPlayer().gameObject.SetActive(false);
                         }
 
                         DoPlayTimeline(playableDirector, clonePlayer.gameObject);
@@ -1309,7 +1309,8 @@ namespace Jyx2
                         {
                             if (playableBinding.outputTargetType == typeof(Animator))
                             {
-                                playableDirector.SetGenericBinding(playableBinding.sourceObject, GameRuntimeData.Instance.Player.View.GetAnimator().gameObject);
+                                var bindPlayerObj = Jyx2Player.GetPlayer().m_Animator.gameObject;
+                                playableDirector.SetGenericBinding(playableBinding.sourceObject, bindPlayerObj);
                             }
                         });
                     }
@@ -1367,9 +1368,11 @@ namespace Jyx2
                 playableDiretor.stopped -= TimeLineNext;
                 timeLineObj.gameObject.SetActive(false);
 
-                GameRuntimeData.Instance.Player.View.gameObject.SetActive(true);
-                GameRuntimeData.Instance.Player.View.GetAnimator().transform.localPosition = Vector3.zero;
-                GameRuntimeData.Instance.Player.View.GetAnimator().transform.localRotation = Quaternion.Euler(Vector3.zero);
+                var player = Jyx2Player.GetPlayer();
+                
+                player.gameObject.SetActive(true);
+                player.m_Animator.transform.localPosition = Vector3.zero;
+                player.m_Animator.transform.localRotation = Quaternion.Euler(Vector3.zero);
                 if(clonePlayer != null)
                 {
                     GameObject.Destroy(clonePlayer.gameObject);
@@ -1477,11 +1480,40 @@ namespace Jyx2
             LightScence();
         }
 
+        public static void jyx2_SetFlag(string flagKey, string value)
+        {
+            runtime.SetKeyValues(GetCustomerFlagPrefix(flagKey), value);
+        }
+
+        public static string jyx2_GetFlag(string flagKey)
+        {
+            if(runtime.KeyExist(GetCustomerFlagPrefix(flagKey)))
+                return runtime.GetKeyValues(GetCustomerFlagPrefix(flagKey));
+            return "";
+        }
+        
+        public static void jyx2_SetFlagInt(string flagKey, int value)
+        {
+            runtime.SetKeyValues(GetCustomerFlagPrefix(flagKey), value.ToString());
+        }
+
+        public static int jyx2_GetFlagInt(string flagKey)
+        {
+            if(runtime.KeyExist(GetCustomerFlagPrefix(flagKey)))
+                return int.Parse(runtime.GetKeyValues(GetCustomerFlagPrefix(flagKey)));
+            return 0;
+        }
+
         #endregion
 
 
         #region private
 
+        private static string GetCustomerFlagPrefix(string flag)
+        {
+            return "CustomerFlag_" + flag;
+        }
+        
         private static void RunInMainThread(Action run)
         {
             Loom.QueueOnMainThread(_ =>
